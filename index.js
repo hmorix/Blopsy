@@ -42,9 +42,11 @@ let cachedAllowedNumbers = fs.readFileSync(ALLOWED_NUMBERS_FILE, 'utf8')
 
 // App & Client State
 let isReady = false;
-let connectionStatus = 'initializing'; // 'initializing', 'qr', 'authenticated', 'loading', 'ready', 'disconnected', 'auth_failure'
+let connectionStatus = 'initializing';
 let loadingProgress = { percent: 0, message: '' };
 let latestQrDataUrl = null;
+let latestPairingCode = null;
+let pairingPhoneNumber = null;
 let clientInfo = null;
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
@@ -175,6 +177,26 @@ const client = new Client(clientOptions);
 client.on('qr', async (qr) => {
     isReady = false;
     connectionStatus = 'qr';
+
+    // If a phone number is set for pairing, use pairing code instead of QR
+    if (pairingPhoneNumber) {
+        try {
+            const code = await client.requestPairingCode(pairingPhoneNumber);
+            latestPairingCode = code;
+            latestQrDataUrl = null;
+            console.log(`📱 Pairing code for ${pairingPhoneNumber}: ${code}`);
+            console.log('Enter this code in WhatsApp > Linked Devices > Link with phone number');
+        } catch (err) {
+            console.error('Failed to generate pairing code:', err.message);
+            // Fallback to QR if pairing code fails
+            try { latestQrDataUrl = await QRCode.toDataURL(qr, { margin: 2, scale: 8 }); } catch(e) {}
+            latestPairingCode = null;
+        }
+        return;
+    }
+
+    // Default: QR Code mode
+    latestPairingCode = null;
     try {
         latestQrDataUrl = await QRCode.toDataURL(qr, { margin: 2, scale: 8 });
     } catch (err) {
@@ -378,6 +400,8 @@ app.get('/api/status', authMiddleware, (req, res) => {
         connectionStatus,
         loadingProgress,
         qrCode: latestQrDataUrl,
+        pairingCode: latestPairingCode,
+        pairingPhoneNumber,
         phoneNumber: clientInfo?.wid?.user || null,
         pushname: clientInfo?.pushname || null,
         isMongoConnected: isMongoConnected(),
@@ -523,6 +547,8 @@ app.post('/api/restart', authMiddleware, async (req, res) => {
         isReady = false;
         connectionStatus = 'initializing';
         latestQrDataUrl = null;
+        latestPairingCode = null;
+        // Don't reset pairingPhoneNumber so pairing code mode persists after restart
         try {
             await client.destroy();
         } catch (e) {}
@@ -535,6 +561,55 @@ app.post('/api/restart', authMiddleware, async (req, res) => {
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
+});
+
+// Phone Number Pairing Code API
+app.post('/api/pair', authMiddleware, async (req, res) => {
+    const { phoneNumber } = req.body;
+    if (!phoneNumber) return res.status(400).json({ error: 'Phone number is required (e.g., 919997875201)' });
+
+    // Clean the phone number - digits only
+    const cleaned = phoneNumber.replace(/\D/g, '');
+    if (cleaned.length < 8) return res.status(400).json({ error: 'Invalid phone number format' });
+
+    pairingPhoneNumber = cleaned;
+    latestPairingCode = null;
+    latestQrDataUrl = null;
+
+    // If already in QR state, request code immediately
+    if (connectionStatus === 'qr') {
+        try {
+            const code = await client.requestPairingCode(cleaned);
+            latestPairingCode = code;
+            console.log(`📱 Pairing code for ${cleaned}: ${code}`);
+            return res.json({ success: true, code, message: 'Enter this code in WhatsApp > Linked Devices > Link with phone number' });
+        } catch (err) {
+            console.error('Failed to get pairing code:', err.message);
+            return res.status(500).json({ error: `Failed to get pairing code: ${err.message}` });
+        }
+    }
+
+    // If not in QR state, restart the client — pairing code will be requested when qr event fires
+    try {
+        isReady = false;
+        connectionStatus = 'initializing';
+        try { await client.destroy(); } catch (e) {}
+        setTimeout(() => {
+            client.initialize().catch(err => {
+                console.error('Failed to reinitialize WhatsApp client:', err.message);
+            });
+        }, 2000);
+        return res.json({ success: true, code: null, message: 'Restarting client... pairing code will appear in the dashboard shortly.' });
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
+});
+
+// Cancel pairing mode and go back to QR
+app.post('/api/cancel-pair', authMiddleware, async (req, res) => {
+    pairingPhoneNumber = null;
+    latestPairingCode = null;
+    res.json({ success: true });
 });
 
 // Server Initialization
