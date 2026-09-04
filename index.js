@@ -42,6 +42,8 @@ let cachedAllowedNumbers = fs.readFileSync(ALLOWED_NUMBERS_FILE, 'utf8')
 
 // App & Client State
 let isReady = false;
+let connectionStatus = 'initializing'; // 'initializing', 'qr', 'authenticated', 'loading', 'ready', 'disconnected', 'auth_failure'
+let loadingProgress = { percent: 0, message: '' };
 let latestQrDataUrl = null;
 let clientInfo = null;
 
@@ -144,9 +146,7 @@ const puppeteerArgs = [
     '--disable-dev-shm-usage',
     '--disable-accelerated-2d-canvas',
     '--no-first-run',
-    '--no-zygote',
     '--disable-gpu',
-    '--single-process', // Drastically reduces RAM footprint on 512MB hosts
     '--disable-background-timer-throttling',
     '--disable-backgrounding-occluded-windows',
     '--disable-renderer-backgrounding'
@@ -157,6 +157,11 @@ const clientOptions = {
     puppeteer: {
         headless: true,
         args: puppeteerArgs
+    },
+    webVersionCache: {
+        type: 'remote',
+        remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/{version}.html',
+        strict: false
     }
 };
 
@@ -169,6 +174,7 @@ const client = new Client(clientOptions);
 // WhatsApp Events
 client.on('qr', async (qr) => {
     isReady = false;
+    connectionStatus = 'qr';
     try {
         latestQrDataUrl = await QRCode.toDataURL(qr, { margin: 2, scale: 8 });
     } catch (err) {
@@ -180,8 +186,28 @@ client.on('qr', async (qr) => {
     console.log('====================================================');
 });
 
+client.on('authenticated', () => {
+    console.log('✅ WhatsApp authenticated successfully! Session verified.');
+    connectionStatus = 'authenticated';
+    latestQrDataUrl = null;
+});
+
+client.on('auth_failure', (msg) => {
+    console.error('❌ WhatsApp Authentication failure:', msg);
+    connectionStatus = 'auth_failure';
+    latestQrDataUrl = null;
+});
+
+client.on('loading_screen', (percent, message) => {
+    console.log(`⏳ Synchronizing WhatsApp: ${percent}% - ${message}`);
+    connectionStatus = 'loading';
+    loadingProgress = { percent, message };
+    latestQrDataUrl = null;
+});
+
 client.on('ready', () => {
     isReady = true;
+    connectionStatus = 'ready';
     latestQrDataUrl = null;
     clientInfo = client.info;
     console.log('✅ WhatsApp Client is ready and connected!');
@@ -200,7 +226,17 @@ client.on('ready', () => {
 client.on('disconnected', (reason) => {
     console.log('❌ WhatsApp was disconnected:', reason);
     isReady = false;
+    connectionStatus = 'disconnected';
     latestQrDataUrl = null;
+    clientInfo = null;
+    setTimeout(() => {
+        try {
+            client.destroy();
+            client.initialize();
+        } catch (e) {
+            console.error('Failed to reinitialize client:', e);
+        }
+    }, 4000);
 });
 
 // Incoming Message Handler
@@ -320,6 +356,7 @@ app.get('/health', (req, res) => {
         status: 'ok',
         uptimeSeconds: Math.floor(process.uptime()),
         isWhatsAppReady: isReady,
+        connectionStatus,
         isMongoConnected: isMongoConnected(),
         memoryUsageMb: Math.round(process.memoryUsage().rss / 1024 / 1024)
     });
@@ -338,6 +375,8 @@ app.post('/api/login', (req, res) => {
 app.get('/api/status', authMiddleware, (req, res) => {
     res.json({
         isReady,
+        connectionStatus,
+        loadingProgress,
         qrCode: latestQrDataUrl,
         phoneNumber: clientInfo?.wid?.user || null,
         pushname: clientInfo?.pushname || null,
@@ -482,12 +521,17 @@ app.get('/api/chats/:number', authMiddleware, async (req, res) => {
 app.post('/api/restart', authMiddleware, async (req, res) => {
     try {
         isReady = false;
+        connectionStatus = 'initializing';
         latestQrDataUrl = null;
-        await client.destroy();
+        try {
+            await client.destroy();
+        } catch (e) {}
         setTimeout(() => {
-            client.initialize();
-        }, 3000);
-        res.json({ success: true, message: 'WhatsApp client restarting...' });
+            client.initialize().catch(err => {
+                console.error('Failed to reinitialize WhatsApp client:', err.message);
+            });
+        }, 2000);
+        res.json({ success: true, message: 'WhatsApp client restarting to generate a fresh session / QR...' });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

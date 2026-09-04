@@ -447,10 +447,25 @@
                         <img id="qr-image" src="" alt="WhatsApp QR Code">
                     </div>
                     <p style="font-weight: 500; margin-bottom: 8px;">Scan with WhatsApp on your phone</p>
-                    <p style="font-size: 0.85rem; color: var(--text-secondary); max-width: 400px;">
+                    <p style="font-size: 0.85rem; color: var(--text-secondary); max-width: 400px; margin-bottom: 8px;">
                         Open WhatsApp $\rightarrow$ Tap Menu / Settings $\rightarrow$ Linked Devices $\rightarrow$ Link a Device.
                     </p>
-                    <button class="btn btn-secondary" style="margin-top: 16px;" onclick="fetchStatus()">Refresh Status</button>
+                    <p style="font-size: 0.8rem; color: var(--warning); margin-bottom: 16px;">
+                        ⚠️ WhatsApp QR codes expire every 20 seconds. If not scanned in time, click "Generate New QR".
+                    </p>
+                    <div style="display: flex; gap: 10px; justify-content: center;">
+                        <button class="btn btn-secondary" onclick="fetchStatus()">Check Status</button>
+                        <button class="btn" onclick="restartClient()">🔄 Generate New QR Code</button>
+                    </div>
+                </div>
+
+                <div id="loading-container" style="display: none; text-align: center; padding: 24px;">
+                    <div style="font-size: 3rem; margin-bottom: 12px;">⏳</div>
+                    <h2 style="font-size: 1.3rem; margin-bottom: 6px;">WhatsApp is Synchronizing...</h2>
+                    <p id="loading-status-text" style="color: var(--accent-blue); font-weight: 600;">Authenticated! Please wait while WhatsApp syncs your session.</p>
+                    <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 8px;">
+                        This takes 10–30 seconds. Do not close this window.
+                    </p>
                 </div>
 
                 <div id="connected-container" style="display: none; text-align: center; padding: 24px;">
@@ -622,6 +637,7 @@
                 const badge = document.getElementById('status-badge');
                 const text = document.getElementById('status-text');
                 const qrContainer = document.getElementById('qr-container');
+                const loadingContainer = document.getElementById('loading-container');
                 const connectedContainer = document.getElementById('connected-container');
                 const qrImage = document.getElementById('qr-image');
 
@@ -631,19 +647,32 @@
                     badge.classList.add('badge-online');
                     text.innerText = 'Connected';
                     qrContainer.style.display = 'none';
+                    loadingContainer.style.display = 'none';
                     connectedContainer.style.display = 'block';
                     document.getElementById('connected-user-info').innerText = 
                         `Logged in as ${data.pushname || 'User'} (${data.phoneNumber || ''})`;
+                } else if (data.connectionStatus === 'loading' || data.connectionStatus === 'authenticated') {
+                    badge.classList.add('badge-pending');
+                    text.innerText = 'Syncing...';
+                    qrContainer.style.display = 'none';
+                    connectedContainer.style.display = 'none';
+                    loadingContainer.style.display = 'block';
+                    if (data.loadingProgress && data.loadingProgress.percent) {
+                        document.getElementById('loading-status-text').innerText = 
+                            `Synchronizing WhatsApp: ${data.loadingProgress.percent}% (${data.loadingProgress.message || 'Please wait'})`;
+                    }
                 } else if (data.qrCode) {
                     badge.classList.add('badge-pending');
                     text.innerText = 'Scan QR Code';
-                    qrContainer.style.display = 'flex';
+                    loadingContainer.style.display = 'none';
                     connectedContainer.style.display = 'none';
+                    qrContainer.style.display = 'flex';
                     qrImage.src = data.qrCode;
                 } else {
                     badge.classList.add('badge-offline');
-                    text.innerText = 'Initializing...';
+                    text.innerText = data.connectionStatus === 'auth_failure' ? 'Auth Failed' : 'Initializing...';
                     qrContainer.style.display = 'none';
+                    loadingContainer.style.display = 'none';
                     connectedContainer.style.display = 'none';
                 }
             } catch (e) {
