@@ -292,6 +292,11 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Serve Admin Dashboard for root and common aliases
+app.get(['/', '/admin', '/login', '/dashboard'], (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
 // Simple Auth Middleware
 function authMiddleware(req, res, next) {
     const authHeader = req.headers['authorization'];
