@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: whatsapp-ai-bot
+    runtime: docker
+    plan: free
+    region: oregon
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: MONGODB_URI
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
